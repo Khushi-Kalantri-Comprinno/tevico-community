@@ -49,17 +49,19 @@ class TestRdsInstanceBackupEnabled:
         self.mock_client = MagicMock()
         self.mock_session.client.return_value = self.mock_client
 
+    def set_mock_describe_db_instances_response(self, instances):
+        """Helper to mock the describe_db_instances response."""
+        self.mock_client.describe_db_instances.return_value = {"DBInstances": instances}
+
     def test_rds_backup_enabled(self):
         """Test when backup is enabled on all RDS instances."""
-        self.mock_client.describe_db_instances.return_value = {
-            "DBInstances": [
-                {
-                    "DBInstanceIdentifier": "db-1",
-                    "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-1",
-                    "BackupRetentionPeriod": 7
-                }
-            ]
-        }
+        self.set_mock_describe_db_instances_response([
+            {
+                "DBInstanceIdentifier": "db-1",
+                "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-1",
+                "BackupRetentionPeriod": 7
+            }
+        ])
 
         report = self.check.execute(self.mock_session)
 
@@ -70,15 +72,13 @@ class TestRdsInstanceBackupEnabled:
 
     def test_rds_backup_not_enabled(self):
         """Test when backup is not enabled on an RDS instance."""
-        self.mock_client.describe_db_instances.return_value = {
-            "DBInstances": [
-                {
-                    "DBInstanceIdentifier": "db-2",
-                    "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-2",
-                    "BackupRetentionPeriod": 0
-                }
-            ]
-        }
+        self.set_mock_describe_db_instances_response([
+            {
+                "DBInstanceIdentifier": "db-2",
+                "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-2",
+                "BackupRetentionPeriod": 0
+            }
+        ])
 
         report = self.check.execute(self.mock_session)
 
@@ -89,20 +89,18 @@ class TestRdsInstanceBackupEnabled:
 
     def test_rds_backup_mixed_instances(self):
         """Test with a mix of compliant and non-compliant RDS instances."""
-        self.mock_client.describe_db_instances.return_value = {
-            "DBInstances": [
-                {
-                    "DBInstanceIdentifier": "db-1",
-                    "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-1",
-                    "BackupRetentionPeriod": 7
-                },
-                {
-                    "DBInstanceIdentifier": "db-2",
-                    "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-2",
-                    "BackupRetentionPeriod": 0
-                }
-            ]
-        }
+        self.set_mock_describe_db_instances_response([
+            {
+                "DBInstanceIdentifier": "db-1",
+                "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-1",
+                "BackupRetentionPeriod": 7
+            },
+            {
+                "DBInstanceIdentifier": "db-2",
+                "DBInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:db-2",
+                "BackupRetentionPeriod": 0
+            }
+        ])
 
         report = self.check.execute(self.mock_session)
 
@@ -113,9 +111,7 @@ class TestRdsInstanceBackupEnabled:
 
     def test_no_rds_instances(self):
         """Test when no RDS instances are found."""
-        self.mock_client.describe_db_instances.return_value = {
-            "DBInstances": []
-        }
+        self.set_mock_describe_db_instances_response([])
 
         report = self.check.execute(self.mock_session)
 
@@ -135,3 +131,16 @@ class TestRdsInstanceBackupEnabled:
         assert len(report.resource_ids_status) == 1
         assert report.resource_ids_status[0].status == CheckStatus.UNKNOWN
         assert "Error retrieving RDS instance details" in report.resource_ids_status[0].summary
+        assert "AccessDenied" in report.resource_ids_status[0].exception
+
+    def test_rds_generic_exception(self):
+        """Test when describe_db_instances raises a generic exception."""
+        self.mock_client.describe_db_instances.side_effect = Exception("Unexpected error")
+
+        report = self.check.execute(self.mock_session)
+
+        assert report.status == CheckStatus.UNKNOWN
+        assert len(report.resource_ids_status) == 1
+        assert report.resource_ids_status[0].status == CheckStatus.UNKNOWN
+        assert "Error retrieving RDS instance details" in report.resource_ids_status[0].summary
+        assert "Unexpected error" in report.resource_ids_status[0].exception
