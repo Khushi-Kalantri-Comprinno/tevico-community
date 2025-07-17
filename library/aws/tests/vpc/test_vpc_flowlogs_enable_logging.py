@@ -54,15 +54,17 @@ class TestVPCFlowLogsEnableLogging:
             "Account": "123456789012"
         }
 
+    def set_vpc_flow_logs(self, vpcs, flow_logs_side_effect):
+        """Helper method to mock VPCs and corresponding flow logs."""
+        self.mock_client.describe_vpcs.return_value = {"Vpcs": vpcs}
+        self.mock_client.describe_flow_logs.side_effect = flow_logs_side_effect
+
     def test_all_vpcs_have_flow_logs_enabled(self):
         """Test when all VPCs have flow logs enabled."""
-        self.mock_client.describe_vpcs.return_value = {
-            "Vpcs": [{"VpcId": "vpc-123"}, {"VpcId": "vpc-456"}]
-        }
-        self.mock_client.describe_flow_logs.side_effect = [
-            {"FlowLogs": [{"FlowLogId": "fl-1"}]},
-            {"FlowLogs": [{"FlowLogId": "fl-2"}]}
-        ]
+        self.set_vpc_flow_logs(
+            [{"VpcId": "vpc-123"}, {"VpcId": "vpc-456"}],
+            [{"FlowLogs": [{"FlowLogId": "fl-1"}]}, {"FlowLogs": [{"FlowLogId": "fl-2"}]}]
+        )
 
         report = self.check.execute(self.mock_session)
 
@@ -72,13 +74,10 @@ class TestVPCFlowLogsEnableLogging:
 
     def test_all_vpcs_have_flow_logs_disabled(self):
         """Test when all VPCs have flow logs disabled."""
-        self.mock_client.describe_vpcs.return_value = {
-            "Vpcs": [{"VpcId": "vpc-111"}, {"VpcId": "vpc-222"}]
-        }
-        self.mock_client.describe_flow_logs.side_effect = [
-            {"FlowLogs": []},
-            {"FlowLogs": []}
-        ]
+        self.set_vpc_flow_logs(
+            [{"VpcId": "vpc-111"}, {"VpcId": "vpc-222"}],
+            [{"FlowLogs": []}, {"FlowLogs": []}]
+        )
 
         report = self.check.execute(self.mock_session)
 
@@ -88,13 +87,10 @@ class TestVPCFlowLogsEnableLogging:
 
     def test_some_vpcs_have_flow_logs_disabled(self):
         """Test when some VPCs have flow logs disabled."""
-        self.mock_client.describe_vpcs.return_value = {
-            "Vpcs": [{"VpcId": "vpc-abc"}, {"VpcId": "vpc-def"}]
-        }
-        self.mock_client.describe_flow_logs.side_effect = [
-            {"FlowLogs": [{"FlowLogId": "fl-abc"}]},
-            {"FlowLogs": []}
-        ]
+        self.set_vpc_flow_logs(
+            [{"VpcId": "vpc-abc"}, {"VpcId": "vpc-def"}],
+            [{"FlowLogs": [{"FlowLogId": "fl-abc"}]}, {"FlowLogs": []}]
+        )
 
         report = self.check.execute(self.mock_session)
 
@@ -105,9 +101,7 @@ class TestVPCFlowLogsEnableLogging:
 
     def test_no_vpcs_exist(self):
         """Test when no VPCs exist in the account."""
-        self.mock_client.describe_vpcs.return_value = {
-            "Vpcs": []
-        }
+        self.mock_client.describe_vpcs.return_value = {"Vpcs": []}
 
         report = self.check.execute(self.mock_session)
 
@@ -117,7 +111,7 @@ class TestVPCFlowLogsEnableLogging:
         assert "No VPCs found" in report.resource_ids_status[0].summary
 
     def test_client_error_handling(self):
-        """Test error handling when a ClientError occurs."""
+        """Test error handling when a ClientError occurs in describe_vpcs."""
         error_response = {'Error': {'Code': 'UnauthorizedOperation', 'Message': 'Access denied'}}
         self.mock_client.describe_vpcs.side_effect = ClientError(error_response, 'DescribeVpcs')
 
@@ -127,3 +121,28 @@ class TestVPCFlowLogsEnableLogging:
         assert len(report.resource_ids_status) == 1
         assert report.resource_ids_status[0].status == CheckStatus.UNKNOWN
         assert "Error fetching VPCs" in report.resource_ids_status[0].summary
+
+    def test_flow_logs_missing_key(self):
+        """Test when 'FlowLogs' key is missing in describe_flow_logs response."""
+        self.set_vpc_flow_logs(
+            [{"VpcId": "vpc-999"}],
+            [{}]  # Missing 'FlowLogs' key
+        )
+
+        report = self.check.execute(self.mock_session)
+
+        assert report.status == CheckStatus.FAILED or report.status == CheckStatus.UNKNOWN
+        assert report.resource_ids_status[0].status in [CheckStatus.FAILED, CheckStatus.UNKNOWN]
+
+    def test_flow_logs_api_failure(self):
+        """Test ClientError from describe_flow_logs."""
+        self.set_vpc_flow_logs(
+            [{"VpcId": "vpc-fail"}],
+            [ClientError({'Error': {'Code': 'AccessDenied', 'Message': 'Denied'}}, 'DescribeFlowLogs')]
+        )
+
+        report = self.check.execute(self.mock_session)
+
+        assert report.status == CheckStatus.UNKNOWN
+        assert report.resource_ids_status[0].status == CheckStatus.UNKNOWN
+        assert "error" in report.resource_ids_status[0].summary.lower()
